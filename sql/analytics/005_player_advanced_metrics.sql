@@ -23,16 +23,16 @@ WITH session_source AS (
             NULLIF(to_jsonb(ps) ->> 'round_id', ''),
             NULLIF(to_jsonb(ps) ->> 'round_guid', ''),
             NULLIF(to_jsonb(ps) ->> 'round_hash', '')
-        )::rounds.id%TYPE AS round_id,
-        ps.team,
-        ps.map_name,
-        ps.mod_name,
-        ps.kills,
-        ps.deaths,
-        ps.score,
-        ps.average_ping_ms,
-        ps.avg_ping_ms,
-        ps.max_ping_ms
+        )::BIGINT AS round_id,
+        (to_jsonb(ps) ->> 'team') AS team,
+        (to_jsonb(ps) ->> 'map_name') AS map_name,
+        (to_jsonb(ps) ->> 'mod_name') AS mod_name,
+        (to_jsonb(ps) ->> 'kills')::INT AS kills,
+        (to_jsonb(ps) ->> 'deaths')::INT AS deaths,
+        (to_jsonb(ps) ->> 'score')::INT AS score,
+        (to_jsonb(ps) ->> 'average_ping_ms')::INT AS average_ping_ms,
+        (to_jsonb(ps) ->> 'avg_ping_ms')::INT AS avg_ping_ms,
+        (to_jsonb(ps) ->> 'max_ping_ms')::INT AS max_ping_ms
     FROM player_sessions ps
         CROSS JOIN LATERAL (
             SELECT
@@ -110,20 +110,20 @@ session_metrics AS (
         ss.deaths,
         ss.score,
         ss.team,
-        COALESCE(r.winning_team, ss.team) AS inferred_winning_team,
-        COALESCE(r.map_name, ss.map_name) AS map_name,
-        COALESCE(r.mod_name, ss.mod_name) AS mod_name,
+        COALESCE(to_jsonb(r) ->> 'winning_team', ss.team) AS inferred_winning_team,
+        COALESCE(to_jsonb(r) ->> 'map_name', ss.map_name) AS map_name,
+        COALESCE(to_jsonb(r) ->> 'mod_name', ss.mod_name) AS mod_name,
         CASE
-            WHEN COALESCE(r.winning_team, ss.team) IS NULL THEN NULL
+            WHEN COALESCE(to_jsonb(r) ->> 'winning_team', ss.team) IS NULL THEN NULL
             WHEN ss.team IS NULL THEN NULL
-            WHEN COALESCE(r.winning_team, ss.team) = ss.team THEN 1
+            WHEN COALESCE(to_jsonb(r) ->> 'winning_team', ss.team) = ss.team THEN 1
             ELSE 0
         END AS win_flag,
         (ss.kills::NUMERIC / NULLIF(ss.deaths, 0)) AS session_kd,
         (ss.kills::NUMERIC / NULLIF(ss.session_seconds_played / 60.0, 0)) AS kills_per_minute,
         (ss.score::NUMERIC / NULLIF(ss.session_seconds_played / 60.0, 0)) AS score_per_minute
     FROM session_source ss
-    LEFT JOIN rounds r ON r.id = ss.round_id::rounds.id%TYPE
+    LEFT JOIN rounds r ON r.id = ss.round_id::BIGINT
 ),
 ranked_sessions AS (
     SELECT
@@ -269,16 +269,16 @@ WITH session_source AS (
             NULLIF(to_jsonb(ps) ->> 'round_id', ''),
             NULLIF(to_jsonb(ps) ->> 'round_guid', ''),
             NULLIF(to_jsonb(ps) ->> 'round_hash', '')
-        )::rounds.id%TYPE AS round_id,
-        ps.team,
-        ps.map_name,
-        ps.mod_name,
-        ps.kills,
-        ps.deaths,
-        ps.score,
-        ps.average_ping_ms,
-        ps.avg_ping_ms,
-        ps.max_ping_ms
+        )::BIGINT AS round_id,
+        (to_jsonb(ps) ->> 'team') AS team,
+        (to_jsonb(ps) ->> 'map_name') AS map_name,
+        (to_jsonb(ps) ->> 'mod_name') AS mod_name,
+        (to_jsonb(ps) ->> 'kills')::INT AS kills,
+        (to_jsonb(ps) ->> 'deaths')::INT AS deaths,
+        (to_jsonb(ps) ->> 'score')::INT AS score,
+        (to_jsonb(ps) ->> 'average_ping_ms')::INT AS average_ping_ms,
+        (to_jsonb(ps) ->> 'avg_ping_ms')::INT AS avg_ping_ms,
+        (to_jsonb(ps) ->> 'max_ping_ms')::INT AS max_ping_ms
     FROM player_sessions ps
         CROSS JOIN LATERAL (
             SELECT
@@ -346,20 +346,20 @@ WITH session_source AS (
 session_metrics AS (
     SELECT
         ss.player_id,
-        COALESCE(r.map_name, ss.map_name) AS map_name,
-        COALESCE(r.mod_name, ss.mod_name) AS mod_name,
+        COALESCE(to_jsonb(r) ->> 'map_name', ss.map_name) AS map_name,
+        COALESCE(to_jsonb(r) ->> 'mod_name', ss.mod_name) AS mod_name,
         ss.session_seconds_played AS seconds_played,
         ss.kills,
         ss.deaths,
         ss.score,
         CASE
-            WHEN COALESCE(r.winning_team, ss.team) IS NULL THEN NULL
+            WHEN COALESCE(to_jsonb(r) ->> 'winning_team', ss.team) IS NULL THEN NULL
             WHEN ss.team IS NULL THEN NULL
-            WHEN COALESCE(r.winning_team, ss.team) = ss.team THEN 1
+            WHEN COALESCE(to_jsonb(r) ->> 'winning_team', ss.team) = ss.team THEN 1
             ELSE 0
         END AS win_flag
     FROM session_source ss
-    LEFT JOIN rounds r ON r.id = ss.round_id::rounds.id%TYPE
+    LEFT JOIN rounds r ON r.id = ss.round_id::BIGINT
 )
 SELECT
     player_id,
@@ -413,22 +413,21 @@ CREATE INDEX IF NOT EXISTS idx_mv_player_map_mod_breakdowns_player_map
 -- |            )
 -- |        ) AS hour_bucket,
 -- |        COUNT(*) AS sessions_started,
--- |        SUM(session_seconds_played)::BIGINT AS seconds_played
--- |    FROM player_sessions ps
--- |    GROUP BY player_id,
--- |        DATE_TRUNC(
--- |            'hour',
+-- |        SUM(
 -- |            COALESCE(
--- |                NULLIF(to_jsonb(ps) ->> 'session_start', '')::TIMESTAMPTZ,
--- |                NULLIF(to_jsonb(ps) ->> 'session_start_at', '')::TIMESTAMPTZ,
--- |                NULLIF(to_jsonb(ps) ->> 'session_started_at', '')::TIMESTAMPTZ,
--- |                NULLIF(to_jsonb(ps) ->> 'session_begin', '')::TIMESTAMPTZ,
--- |                NULLIF(to_jsonb(ps) ->> 'session_begin_at', '')::TIMESTAMPTZ,
--- |                NULLIF(to_jsonb(ps) ->> 'start_time', '')::TIMESTAMPTZ,
--- |                NULLIF(to_jsonb(ps) ->> 'started_at', '')::TIMESTAMPTZ,
--- |                NULLIF(to_jsonb(ps) ->> 'created_at', '')::TIMESTAMPTZ
+-- |                GREATEST(
+-- |                    COALESCE(
+-- |                        NULLIF(to_jsonb(ps) ->> 'session_duration_seconds', '')::DOUBLE PRECISION,
+-- |                        NULLIF(to_jsonb(ps) ->> 'duration_seconds', '')::DOUBLE PRECISION,
+-- |                        NULLIF(to_jsonb(ps) ->> 'seconds_played', '')::DOUBLE PRECISION
+-- |                    ),
+-- |                    60.0
+-- |                ),
+-- |                60.0
 -- |            )
--- |        )
+-- |        )::BIGINT AS seconds_played
+-- |    FROM player_sessions ps
+-- |    GROUP BY 1, 2
 -- |) agg
 -- |WHERE agg.hour_bucket >= COALESCE((SELECT MAX(hour_bucket) FROM player_session_heatmaps), '1970-01-01'::TIMESTAMPTZ)
 -- |ON CONFLICT (player_id, hour_bucket) DO UPDATE

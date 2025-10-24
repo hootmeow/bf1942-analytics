@@ -27,7 +27,13 @@
 -- |            SELECT jsonb_object_agg(map_name, sample_count)
 -- |            FROM (
 -- |                SELECT map_name, COUNT(*) AS sample_count
--- |                FROM snapshots s2
+-- |                FROM (
+-- |                    SELECT
+-- |                        ss.server_id,
+-- |                        DATE_TRUNC('hour', (to_jsonb(ss) ->> 'snapshot_time')::TIMESTAMPTZ) AS bucket,
+-- |                        COALESCE(to_jsonb(ss) ->> 'map_name', to_jsonb(ss) ->> 'map', 'unknown') AS map_name
+-- |                    FROM server_snapshots ss
+-- |                ) s2
 -- |                WHERE s2.server_id = s1.server_id
 -- |                  AND s2.bucket = s1.bucket
 -- |                GROUP BY map_name
@@ -37,7 +43,13 @@
 -- |            SELECT jsonb_object_agg(mod_name, sample_count)
 -- |            FROM (
 -- |                SELECT mod_name, COUNT(*) AS sample_count
--- |                FROM snapshots s3
+-- |                FROM (
+-- |                    SELECT
+-- |                        ss.server_id,
+-- |                        DATE_TRUNC('hour', (to_jsonb(ss) ->> 'snapshot_time')::TIMESTAMPTZ) AS bucket,
+-- |                        COALESCE(to_jsonb(ss) ->> 'mod_name', to_jsonb(ss) ->> 'mod', 'unknown') AS mod_name
+-- |                    FROM server_snapshots ss
+-- |                ) s3
 -- |                WHERE s3.server_id = s1.server_id
 -- |                  AND s3.bucket = s1.bucket
 -- |                GROUP BY mod_name
@@ -45,12 +57,12 @@
 -- |        ) AS mod_samples
 -- |    FROM (
 -- |        SELECT
--- |            DATE_TRUNC('hour', snapshot_time) AS bucket,
--- |            server_id,
--- |            COALESCE(map_name, payload ->> 'map') AS map_name,
--- |            COALESCE(mod_name, payload ->> 'mod') AS mod_name,
--- |            COALESCE((payload ->> 'player_count')::INT, 0) AS player_count
--- |        FROM server_snapshots
+-- |            DATE_TRUNC('hour', (to_jsonb(ss) ->> 'snapshot_time')::TIMESTAMPTZ) AS bucket,
+-- |            ss.server_id,
+-- |            COALESCE(to_jsonb(ss) ->> 'map_name', to_jsonb(ss) ->> 'map', 'unknown') AS map_name,
+-- |            COALESCE(to_jsonb(ss) ->> 'mod_name', to_jsonb(ss) ->> 'mod', 'unknown') AS mod_name,
+-- |            COALESCE((to_jsonb(ss) ->> 'player_count')::INT, 0) AS player_count
+-- |        FROM server_snapshots ss
 -- |    ) s1
 -- |    GROUP BY bucket, server_id
 -- |) agg

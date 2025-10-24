@@ -9,10 +9,10 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS mv_server_population_trends AS
 WITH raw_snapshots AS (
     SELECT
         ss.server_id,
-        ss.snapshot_time,
-        DATE_TRUNC('hour', ss.snapshot_time) AS hour_bucket,
-        COALESCE(ss.player_count, (ss.payload ->> 'player_count')::INT, 0) AS player_count,
-        COALESCE(ss.status, ss.payload ->> 'status', 'unknown') AS status
+        (to_jsonb(ss) ->> 'snapshot_time')::TIMESTAMPTZ AS snapshot_time,
+        DATE_TRUNC('hour', (to_jsonb(ss) ->> 'snapshot_time')::TIMESTAMPTZ) AS hour_bucket,
+        COALESCE((to_jsonb(ss) ->> 'player_count')::INT, 0) AS player_count,
+        COALESCE(to_jsonb(ss) ->> 'status', 'unknown') AS status
     FROM server_snapshots ss
 ),
 hourly AS (
@@ -82,14 +82,14 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS mv_server_rotation_statistics AS
 WITH round_data AS (
     SELECT
         r.server_id,
-        r.map_name,
-        r.mod_name,
-        r.started_at,
-        r.ended_at,
-        EXTRACT(EPOCH FROM (COALESCE(r.ended_at, NOW()) - r.started_at)) AS duration_seconds,
-        LAG(r.map_name) OVER (PARTITION BY r.server_id ORDER BY r.started_at) AS previous_map,
-        LEAD(r.map_name) OVER (PARTITION BY r.server_id ORDER BY r.started_at) AS next_map,
-        ROW_NUMBER() OVER (PARTITION BY r.server_id ORDER BY r.started_at DESC) AS recent_round_rank
+        (to_jsonb(r) ->> 'map_name') AS map_name,
+        (to_jsonb(r) ->> 'mod_name') AS mod_name,
+        (to_jsonb(r) ->> 'started_at')::TIMESTAMPTZ AS started_at,
+        (to_jsonb(r) ->> 'ended_at')::TIMESTAMPTZ AS ended_at,
+        EXTRACT(EPOCH FROM (COALESCE((to_jsonb(r) ->> 'ended_at')::TIMESTAMPTZ, NOW()) - (to_jsonb(r) ->> 'started_at')::TIMESTAMPTZ)) AS duration_seconds,
+        LAG((to_jsonb(r) ->> 'map_name')) OVER (PARTITION BY r.server_id ORDER BY (to_jsonb(r) ->> 'started_at')::TIMESTAMPTZ) AS previous_map,
+        LEAD((to_jsonb(r) ->> 'map_name')) OVER (PARTITION BY r.server_id ORDER BY (to_jsonb(r) ->> 'started_at')::TIMESTAMPTZ) AS next_map,
+        ROW_NUMBER() OVER (PARTITION BY r.server_id ORDER BY (to_jsonb(r) ->> 'started_at')::TIMESTAMPTZ DESC) AS recent_round_rank
     FROM rounds r
 )
 SELECT
@@ -129,7 +129,11 @@ WITH session_timings AS (
             NULLIF(to_jsonb(ps) ->> 'started_at', '')::TIMESTAMPTZ,
             NULLIF(to_jsonb(ps) ->> 'created_at', '')::TIMESTAMPTZ
         ) AS session_start,
-        COALESCE(ps.average_ping_ms, ps.avg_ping_ms, ps.max_ping_ms) AS ping_sample
+        COALESCE(
+            (to_jsonb(ps) ->> 'average_ping_ms')::INT,
+            (to_jsonb(ps) ->> 'avg_ping_ms')::INT,
+            (to_jsonb(ps) ->> 'max_ping_ms')::INT
+        ) AS ping_sample
     FROM player_sessions ps
 )
 SELECT
@@ -170,16 +174,16 @@ WITH session_source AS (
             NULLIF(to_jsonb(ps) ->> 'round_id', ''),
             NULLIF(to_jsonb(ps) ->> 'round_guid', ''),
             NULLIF(to_jsonb(ps) ->> 'round_hash', '')
-        )::rounds.id%TYPE AS round_id,
-        ps.team,
-        ps.map_name,
-        ps.mod_name,
-        ps.kills,
-        ps.deaths,
-        ps.score,
-        ps.average_ping_ms,
-        ps.avg_ping_ms,
-        ps.max_ping_ms
+        )::BIGINT AS round_id,
+        (to_jsonb(ps) ->> 'team') AS team,
+        (to_jsonb(ps) ->> 'map_name') AS map_name,
+        (to_jsonb(ps) ->> 'mod_name') AS mod_name,
+        (to_jsonb(ps) ->> 'kills')::INT AS kills,
+        (to_jsonb(ps) ->> 'deaths')::INT AS deaths,
+        (to_jsonb(ps) ->> 'score')::INT AS score,
+        (to_jsonb(ps) ->> 'average_ping_ms')::INT AS average_ping_ms,
+        (to_jsonb(ps) ->> 'avg_ping_ms')::INT AS avg_ping_ms,
+        (to_jsonb(ps) ->> 'max_ping_ms')::INT AS max_ping_ms
     FROM player_sessions ps
         CROSS JOIN LATERAL (
             SELECT
@@ -254,13 +258,13 @@ session_metrics AS (
         ss.session_start_at,
         ss.session_end_at,
         CASE
-            WHEN COALESCE(r.winning_team, ss.team) IS NULL THEN NULL
+            WHEN COALESCE(to_jsonb(r) ->> 'winning_team', ss.team) IS NULL THEN NULL
             WHEN ss.team IS NULL THEN NULL
-            WHEN COALESCE(r.winning_team, ss.team) = ss.team THEN 1
+            WHEN COALESCE(to_jsonb(r) ->> 'winning_team', ss.team) = ss.team THEN 1
             ELSE 0
         END AS win_flag
     FROM session_source ss
-    LEFT JOIN rounds r ON r.id = ss.round_id::rounds.id%TYPE
+    LEFT JOIN rounds r ON r.id = ss.round_id::BIGINT
 ),
 player_totals AS (
     SELECT

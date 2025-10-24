@@ -9,10 +9,10 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS mv_server_uptime AS
 WITH snapshots AS (
     SELECT
         server_id,
-        snapshot_time,
-        status,
-        LAG(snapshot_time) OVER (PARTITION BY server_id ORDER BY snapshot_time) AS previous_snapshot
-    FROM server_snapshots
+        (to_jsonb(ss) ->> 'snapshot_time')::TIMESTAMPTZ AS snapshot_time,
+        (to_jsonb(ss) ->> 'status') AS status,
+        LAG((to_jsonb(ss) ->> 'snapshot_time')::TIMESTAMPTZ) OVER (PARTITION BY server_id ORDER BY (to_jsonb(ss) ->> 'snapshot_time')::TIMESTAMPTZ) AS previous_snapshot
+    FROM server_snapshots ss
 )
 SELECT
     server_id,

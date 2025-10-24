@@ -7,14 +7,14 @@
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS mv_map_mod_trends AS
 SELECT
-    DATE_TRUNC('day', snapshot_time) AS day_bucket,
-    COALESCE(map_name, payload ->> 'map') AS map_name,
-    COALESCE(mod_name, payload ->> 'mod') AS mod_name,
+    DATE_TRUNC('day', (to_jsonb(ss) ->> 'snapshot_time')::TIMESTAMPTZ) AS day_bucket,
+    COALESCE(to_jsonb(ss) ->> 'map_name', to_jsonb(ss) ->> 'map', 'unknown') AS map_name,
+    COALESCE(to_jsonb(ss) ->> 'mod_name', to_jsonb(ss) ->> 'mod', 'unknown') AS mod_name,
     COUNT(*) AS samples,
-    AVG((payload ->> 'player_count')::NUMERIC) AS average_players,
-    MAX((payload ->> 'player_count')::INT) AS peak_players
-FROM server_snapshots
-GROUP BY DATE_TRUNC('day', snapshot_time), COALESCE(map_name, payload ->> 'map'), COALESCE(mod_name, payload ->> 'mod');
+    AVG((to_jsonb(ss) ->> 'player_count')::NUMERIC) AS average_players,
+    MAX((to_jsonb(ss) ->> 'player_count')::INT) AS peak_players
+FROM server_snapshots ss
+GROUP BY 1, 2, 3;
 
 CREATE INDEX IF NOT EXISTS idx_mv_map_mod_trends_bucket
     ON mv_map_mod_trends (day_bucket, map_name, mod_name);

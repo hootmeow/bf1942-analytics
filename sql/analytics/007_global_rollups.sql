@@ -9,20 +9,20 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS mv_global_activity_rollups AS
 WITH latest_snapshots AS (
     SELECT DISTINCT ON (ss.server_id)
         ss.server_id,
-        ss.snapshot_time,
-        COALESCE(ss.player_count, (ss.payload ->> 'player_count')::INT, 0) AS player_count,
-        COALESCE(ss.map_name, ss.payload ->> 'map') AS map_name,
-        COALESCE(ss.mod_name, ss.payload ->> 'mod') AS mod_name,
+        (to_jsonb(ss) ->> 'snapshot_time')::TIMESTAMPTZ AS snapshot_time,
+        COALESCE((to_jsonb(ss) ->> 'player_count')::INT, 0) AS player_count,
+        COALESCE(to_jsonb(ss) ->> 'map_name', to_jsonb(ss) ->> 'map', 'unknown') AS map_name,
+        COALESCE(to_jsonb(ss) ->> 'mod_name', to_jsonb(ss) ->> 'mod', 'unknown') AS mod_name,
         COALESCE(
-            ss.payload ->> 'country',
-            ss.payload ->> 'country_code',
-            ss.payload ->> 'region',
-            ss.payload ->> 'geo_country',
+            to_jsonb(ss) ->> 'country',
+            to_jsonb(ss) ->> 'country_code',
+            to_jsonb(ss) ->> 'region',
+            to_jsonb(ss) ->> 'geo_country',
             'unknown'
         ) AS region,
-        ss.payload ->> 'ip' AS ip_address
+        to_jsonb(ss) ->> 'ip' AS ip_address
     FROM server_snapshots ss
-    ORDER BY ss.server_id, ss.snapshot_time DESC
+    ORDER BY ss.server_id, (to_jsonb(ss) ->> 'snapshot_time')::TIMESTAMPTZ DESC
 ),
 global_counts AS (
     SELECT
@@ -78,16 +78,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_global_activity_rollups_singleton
 CREATE MATERIALIZED VIEW IF NOT EXISTS mv_global_daily_trends AS
 WITH daily_snapshots AS (
     SELECT
-        DATE_TRUNC('day', ss.snapshot_time) AS day_bucket,
-        SUM(COALESCE(ss.player_count, (ss.payload ->> 'player_count')::INT, 0)) AS total_players,
-        AVG(COALESCE(ss.player_count, (ss.payload ->> 'player_count')::INT, 0))::NUMERIC AS average_players,
-        MAX(COALESCE(ss.player_count, (ss.payload ->> 'player_count')::INT, 0)) AS peak_players
+        DATE_TRUNC('day', (to_jsonb(ss) ->> 'snapshot_time')::TIMESTAMPTZ) AS day_bucket,
+        SUM(COALESCE((to_jsonb(ss) ->> 'player_count')::INT, 0)) AS total_players,
+        AVG(COALESCE((to_jsonb(ss) ->> 'player_count')::INT, 0))::NUMERIC AS average_players,
+        MAX(COALESCE((to_jsonb(ss) ->> 'player_count')::INT, 0)) AS peak_players
     FROM server_snapshots ss
-    GROUP BY DATE_TRUNC('day', ss.snapshot_time)
+    GROUP BY 1
 ),
 ranked_days AS (
     SELECT
-        ds.*, 
+        ds.*,
         SUM(total_players) OVER (
             ORDER BY day_bucket
             ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
@@ -100,11 +100,11 @@ ranked_days AS (
 ),
 map_popularity AS (
     SELECT
-        DATE_TRUNC('day', ss.snapshot_time) AS day_bucket,
-        COALESCE(ss.map_name, ss.payload ->> 'map') AS map_name,
-        SUM(COALESCE(ss.player_count, (ss.payload ->> 'player_count')::INT, 0)) AS player_minutes
+        DATE_TRUNC('day', (to_jsonb(ss) ->> 'snapshot_time')::TIMESTAMPTZ) AS day_bucket,
+        COALESCE(to_jsonb(ss) ->> 'map_name', to_jsonb(ss) ->> 'map', 'unknown') AS map_name,
+        SUM(COALESCE((to_jsonb(ss) ->> 'player_count')::INT, 0)) AS player_minutes
     FROM server_snapshots ss
-    GROUP BY DATE_TRUNC('day', ss.snapshot_time), COALESCE(ss.map_name, ss.payload ->> 'map')
+    GROUP BY 1, 2
 ),
 map_rankings AS (
     SELECT
@@ -119,11 +119,11 @@ map_rankings AS (
 ),
 mod_popularity AS (
     SELECT
-        DATE_TRUNC('day', ss.snapshot_time) AS day_bucket,
-        COALESCE(ss.mod_name, ss.payload ->> 'mod') AS mod_name,
-        SUM(COALESCE(ss.player_count, (ss.payload ->> 'player_count')::INT, 0)) AS player_minutes
+        DATE_TRUNC('day', (to_jsonb(ss) ->> 'snapshot_time')::TIMESTAMPTZ) AS day_bucket,
+        COALESCE(to_jsonb(ss) ->> 'mod_name', to_jsonb(ss) ->> 'mod', 'unknown') AS mod_name,
+        SUM(COALESCE((to_jsonb(ss) ->> 'player_count')::INT, 0)) AS player_minutes
     FROM server_snapshots ss
-    GROUP BY DATE_TRUNC('day', ss.snapshot_time), COALESCE(ss.mod_name, ss.payload ->> 'mod')
+    GROUP BY 1, 2
 ),
 mod_rankings AS (
     SELECT
@@ -164,15 +164,15 @@ CREATE INDEX IF NOT EXISTS idx_mv_global_daily_trends_day
 CREATE MATERIALIZED VIEW IF NOT EXISTS mv_global_region_activity AS
 WITH region_snapshots AS (
     SELECT
-        DATE_TRUNC('day', ss.snapshot_time) AS day_bucket,
+        DATE_TRUNC('day', (to_jsonb(ss) ->> 'snapshot_time')::TIMESTAMPTZ) AS day_bucket,
         COALESCE(
-            ss.payload ->> 'country',
-            ss.payload ->> 'country_code',
-            ss.payload ->> 'region',
-            ss.payload ->> 'geo_country',
+            to_jsonb(ss) ->> 'country',
+            to_jsonb(ss) ->> 'country_code',
+            to_jsonb(ss) ->> 'region',
+            to_jsonb(ss) ->> 'geo_country',
             'unknown'
         ) AS region,
-        COALESCE(ss.player_count, (ss.payload ->> 'player_count')::INT, 0) AS player_count
+        COALESCE((to_jsonb(ss) ->> 'player_count')::INT, 0) AS player_count
     FROM server_snapshots ss
 ),
 region_totals AS (

@@ -23,16 +23,16 @@ WITH session_source AS (
             NULLIF(to_jsonb(ps) ->> 'round_id', ''),
             NULLIF(to_jsonb(ps) ->> 'round_guid', ''),
             NULLIF(to_jsonb(ps) ->> 'round_hash', '')
-        )::rounds.id%TYPE AS round_id,
-        ps.team,
-        ps.map_name,
-        ps.mod_name,
-        ps.kills,
-        ps.deaths,
-        ps.score,
-        ps.average_ping_ms,
-        ps.avg_ping_ms,
-        ps.max_ping_ms
+        )::BIGINT AS round_id,
+        (to_jsonb(ps) ->> 'team') AS team,
+        (to_jsonb(ps) ->> 'map_name') AS map_name,
+        (to_jsonb(ps) ->> 'mod_name') AS mod_name,
+        (to_jsonb(ps) ->> 'kills')::INT AS kills,
+        (to_jsonb(ps) ->> 'deaths')::INT AS deaths,
+        (to_jsonb(ps) ->> 'score')::INT AS score,
+        (to_jsonb(ps) ->> 'average_ping_ms')::INT AS average_ping_ms,
+        (to_jsonb(ps) ->> 'avg_ping_ms')::INT AS avg_ping_ms,
+        (to_jsonb(ps) ->> 'max_ping_ms')::INT AS max_ping_ms
     FROM player_sessions ps
         CROSS JOIN LATERAL (
             SELECT
