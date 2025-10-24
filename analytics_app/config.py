@@ -5,7 +5,26 @@ import logging
 import os
 from dataclasses import dataclass, field
 from functools import lru_cache
+from pathlib import Path
 from typing import List
+
+
+def _load_env_file() -> None:
+    """Populate ``os.environ`` with values from a local ``.env`` file."""
+
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.exists():  # pragma: no cover - filesystem guard
+        return
+
+    for line in env_path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        os.environ.setdefault(key, value)
+
+
+_load_env_file()
 
 
 @dataclass(frozen=True)
