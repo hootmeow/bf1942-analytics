@@ -166,7 +166,11 @@ WITH session_source AS (
         durations.session_seconds_played,
         ps.id,
         ps.server_id,
-        ps.round_id,
+        COALESCE(
+            NULLIF(to_jsonb(ps) ->> 'round_id', ''),
+            NULLIF(to_jsonb(ps) ->> 'round_guid', ''),
+            NULLIF(to_jsonb(ps) ->> 'round_hash', '')
+        )::rounds.id%TYPE AS round_id,
         ps.team,
         ps.map_name,
         ps.mod_name,
@@ -256,7 +260,7 @@ session_metrics AS (
             ELSE 0
         END AS win_flag
     FROM session_source ss
-    LEFT JOIN rounds r ON r.id = ss.round_id
+    LEFT JOIN rounds r ON r.id = ss.round_id::rounds.id%TYPE
 ),
 player_totals AS (
     SELECT
