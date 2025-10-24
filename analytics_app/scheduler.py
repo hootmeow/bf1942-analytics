@@ -8,11 +8,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import AppConfig
-from .jobs import (
-    refresh_materialized_views,
-    run_partition_procedure,
-    run_retention_procedure,
-)
+from .jobs import run_partition_procedure, run_retention_procedure, run_sql_refresh_jobs
 
 LOGGER = logging.getLogger(__name__)
 
@@ -36,10 +32,10 @@ class SchedulerManager:
         LOGGER.info("Starting scheduler with configuration: %s", scheduler_conf)
 
         self._scheduler.add_job(
-            refresh_materialized_views,
+            run_sql_refresh_jobs,
             trigger=IntervalTrigger(seconds=scheduler_conf.refresh_interval_seconds),
-            args=[self._pool, scheduler_conf.views_to_refresh],
-            id="refresh_materialized_views",
+            args=[self._pool, scheduler_conf],
+            id="run_sql_refresh_jobs",
             replace_existing=True,
         )
 

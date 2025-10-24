@@ -42,6 +42,7 @@ class SchedulerConfig:
     )
     retention_procedure: str | None = None
     partition_procedure: str | None = None
+    sql_jobs_directory: str = "sql/analytics"
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,9 @@ def get_config() -> AppConfig:
             "PARTITION_PROCEDURE", default_scheduler.partition_procedure or ""
         )
         or None,
+        sql_jobs_directory=os.getenv(
+            "ANALYTICS_SQL_DIRECTORY", default_scheduler.sql_jobs_directory
+        ),
     )
 
     default_app = AppConfig()
