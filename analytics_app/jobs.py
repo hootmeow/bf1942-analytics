@@ -2,25 +2,39 @@
 from __future__ import annotations
 
 import logging
-from typing import Iterable
+from pathlib import Path
 
 from asyncpg.pool import Pool
 
 from .config import SchedulerConfig
+from .sql_jobs import (
+    execute_sql_job,
+    load_sql_jobs,
+    record_job_result,
+)
 
 LOGGER = logging.getLogger(__name__)
 
 
-async def refresh_materialized_views(pool: Pool, views: Iterable[str]) -> None:
-    """Refresh configured materialized views."""
+async def run_sql_refresh_jobs(pool: Pool, scheduler_config: SchedulerConfig) -> None:
+    """Execute SQL refresh jobs discovered from the configured directory."""
+
+    sql_directory = Path(scheduler_config.sql_jobs_directory)
+    definitions = load_sql_jobs(sql_directory)
+    if not definitions:
+        LOGGER.debug("No SQL jobs discovered in directory: %s", sql_directory)
+        return
 
     async with pool.acquire() as connection:
-        for view in views:
-            quoted_view = await connection.fetchval("SELECT quote_ident($1)", view)
-            LOGGER.info("Refreshing materialized view: %s", view)
-            await connection.execute(
-                f"REFRESH MATERIALIZED VIEW CONCURRENTLY {quoted_view};"
-            )
+        for definition in definitions:
+            result = await execute_sql_job(connection, definition)
+            try:
+                await record_job_result(connection, result)
+            except Exception:  # pragma: no cover - persistence failure
+                LOGGER.exception(
+                    "Failed to persist analytics job metrics for %s",
+                    definition.name,
+                )
 
 
 async def run_retention_procedure(pool: Pool, scheduler_config: SchedulerConfig) -> None:
@@ -56,7 +70,7 @@ async def run_partition_procedure(pool: Pool, scheduler_config: SchedulerConfig)
 
 
 __all__ = [
-    "refresh_materialized_views",
+    "run_sql_refresh_jobs",
     "run_partition_procedure",
     "run_retention_procedure",
 ]

@@ -8,6 +8,7 @@ from fastapi import Depends, FastAPI, HTTPException
 
 from .config import AppConfig, get_config
 from .db import close_db_pool, get_pool, init_db_pool
+from .migrations import apply_sql_directory
 from .scheduler import SchedulerManager
 
 LOGGER = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ async def on_startup() -> None:
     LOGGER.info("Starting analytics application")
 
     pool = await init_db_pool(config)
+    await apply_sql_directory(pool)
     scheduler_manager = SchedulerManager(config, pool)
     scheduler_manager.start()
 
