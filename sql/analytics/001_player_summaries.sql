@@ -19,7 +19,11 @@ WITH session_source AS (
         durations.session_seconds_played,
         ps.id,
         ps.server_id,
-        ps.round_id,
+        COALESCE(
+            NULLIF(to_jsonb(ps) ->> 'round_id', ''),
+            NULLIF(to_jsonb(ps) ->> 'round_guid', ''),
+            NULLIF(to_jsonb(ps) ->> 'round_hash', '')
+        )::rounds.id%TYPE AS round_id,
         ps.team,
         ps.map_name,
         ps.mod_name,
