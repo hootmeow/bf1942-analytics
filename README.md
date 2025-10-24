@@ -94,14 +94,14 @@ The dependency footprint is intentionally small:
 
 If you installed PostgreSQL locally, create a role and database for the
 analytics service. The examples below assume the ingest pipeline already writes
-into a database named `bf1942`.
+into a database named `bf1942_db`.
 
 ```bash
 sudo -u postgres psql <<'SQL'
 CREATE ROLE bf1942_analytics WITH LOGIN PASSWORD 'change-me';
-CREATE DATABASE bf1942 OWNER bf1942_analytics;
-GRANT ALL PRIVILEGES ON DATABASE bf1942 TO bf1942_analytics;
-\c bf1942
+CREATE DATABASE bf1942_db OWNER bf1942_analytics;
+GRANT ALL PRIVILEGES ON DATABASE bf1942_db TO bf1942_analytics;
+\c bf1942_db
 GRANT USAGE ON SCHEMA public TO bf1942_analytics;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO bf1942_analytics;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO bf1942_analytics;
@@ -129,7 +129,7 @@ cat <<'ENV' > .env
 # Database connection
 DB_HOST=127.0.0.1
 DB_PORT=5432
-DB_NAME=bf1942
+DB_NAME=bf1942_db
 DB_USER=bf1942_analytics
 DB_PASSWORD=change-me
 DB_POOL_MIN_SIZE=2
