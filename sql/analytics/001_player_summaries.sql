@@ -7,20 +7,29 @@
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS mv_player_summaries AS
 WITH session_source AS (
-    SELECT *
-    FROM (
-        SELECT
-            COALESCE(
-                to_jsonb(ps) ->> 'player_id',
-                to_jsonb(ps) ->> 'player_guid',
-                to_jsonb(ps) ->> 'player_hash',
-                to_jsonb(ps) ->> 'player_name'
-            ) AS player_id,
-            starts.session_start,
-            normalized.session_end_at,
-            durations.session_seconds_played,
-            ps.*
-        FROM player_sessions ps
+    SELECT
+        COALESCE(
+            to_jsonb(ps) ->> 'player_id',
+            to_jsonb(ps) ->> 'player_guid',
+            to_jsonb(ps) ->> 'player_hash',
+            to_jsonb(ps) ->> 'player_name'
+        ) AS player_id,
+        starts.session_start AS session_start_at,
+        normalized.session_end_at,
+        durations.session_seconds_played,
+        ps.id,
+        ps.server_id,
+        ps.round_id,
+        ps.team,
+        ps.map_name,
+        ps.mod_name,
+        ps.kills,
+        ps.deaths,
+        ps.score,
+        ps.average_ping_ms,
+        ps.avg_ping_ms,
+        ps.max_ping_ms
+    FROM player_sessions ps
         CROSS JOIN LATERAL (
             SELECT
                 COALESCE(
@@ -77,8 +86,12 @@ WITH session_source AS (
                     60.0
                 ) AS session_seconds_played
         ) durations
-    ) enriched
-    WHERE enriched.player_id IS NOT NULL
+    WHERE COALESCE(
+        to_jsonb(ps) ->> 'player_id',
+        to_jsonb(ps) ->> 'player_guid',
+        to_jsonb(ps) ->> 'player_hash',
+        to_jsonb(ps) ->> 'player_name'
+    ) IS NOT NULL
 )
 SELECT
     ss.player_id,
@@ -88,7 +101,7 @@ SELECT
     SUM(ss.deaths) AS total_deaths,
     SUM(ss.score) AS total_score,
     (SUM(ss.kills)::NUMERIC / NULLIF(SUM(ss.deaths), 0)) AS kill_death_ratio,
-    MAX(COALESCE(ss.session_end_at, ss.session_start)) AS last_seen_at
+    MAX(COALESCE(ss.session_end_at, ss.session_start_at)) AS last_seen_at
 FROM session_source ss
 GROUP BY ss.player_id;
 
