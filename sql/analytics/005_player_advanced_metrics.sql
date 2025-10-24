@@ -7,20 +7,29 @@
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS mv_player_advanced_metrics AS
 WITH session_source AS (
-    SELECT *
-    FROM (
-        SELECT
-            COALESCE(
-                to_jsonb(ps) ->> 'player_id',
-                to_jsonb(ps) ->> 'player_guid',
-                to_jsonb(ps) ->> 'player_hash',
-                to_jsonb(ps) ->> 'player_name'
-            ) AS player_id,
-            starts.session_start,
-            normalized.session_end_at,
-            durations.session_seconds_played,
-            ps.*
-        FROM player_sessions ps
+    SELECT
+        COALESCE(
+            to_jsonb(ps) ->> 'player_id',
+            to_jsonb(ps) ->> 'player_guid',
+            to_jsonb(ps) ->> 'player_hash',
+            to_jsonb(ps) ->> 'player_name'
+        ) AS player_id,
+        starts.session_start AS session_start_at,
+        normalized.session_end_at,
+        durations.session_seconds_played,
+        ps.id,
+        ps.server_id,
+        ps.round_id,
+        ps.team,
+        ps.map_name,
+        ps.mod_name,
+        ps.kills,
+        ps.deaths,
+        ps.score,
+        ps.average_ping_ms,
+        ps.avg_ping_ms,
+        ps.max_ping_ms
+    FROM player_sessions ps
         CROSS JOIN LATERAL (
             SELECT
                 COALESCE(
@@ -77,8 +86,12 @@ WITH session_source AS (
                     60.0
                 ) AS session_seconds_played
         ) durations
-    ) enriched
-    WHERE enriched.player_id IS NOT NULL
+    WHERE COALESCE(
+        to_jsonb(ps) ->> 'player_id',
+        to_jsonb(ps) ->> 'player_guid',
+        to_jsonb(ps) ->> 'player_hash',
+        to_jsonb(ps) ->> 'player_name'
+    ) IS NOT NULL
 ),
 session_metrics AS (
     SELECT
@@ -86,7 +99,7 @@ session_metrics AS (
         ss.id AS session_id,
         ss.server_id,
         ss.round_id,
-        ss.session_start,
+        ss.session_start_at,
         ss.session_end_at,
         ss.session_seconds_played AS seconds_played,
         ss.kills,
@@ -111,25 +124,25 @@ session_metrics AS (
 ranked_sessions AS (
     SELECT
         sm.*,
-        ROW_NUMBER() OVER (PARTITION BY sm.player_id ORDER BY sm.session_start DESC) AS session_rank,
+        ROW_NUMBER() OVER (PARTITION BY sm.player_id ORDER BY sm.session_start_at DESC) AS session_rank,
         AVG(sm.session_kd) OVER (
             PARTITION BY sm.player_id
-            ORDER BY sm.session_start DESC
+            ORDER BY sm.session_start_at DESC
             ROWS BETWEEN 4 PRECEDING AND CURRENT ROW
         ) AS rolling_kd_ratio,
         AVG(COALESCE(sm.win_flag, 0)::NUMERIC) OVER (
             PARTITION BY sm.player_id
-            ORDER BY sm.session_start DESC
+            ORDER BY sm.session_start_at DESC
             ROWS BETWEEN 4 PRECEDING AND CURRENT ROW
         ) AS rolling_win_rate,
         AVG(sm.kills_per_minute) OVER (
             PARTITION BY sm.player_id
-            ORDER BY sm.session_start DESC
+            ORDER BY sm.session_start_at DESC
             ROWS BETWEEN 4 PRECEDING AND CURRENT ROW
         ) AS rolling_kpm,
         AVG(sm.score_per_minute) OVER (
             PARTITION BY sm.player_id
-            ORDER BY sm.session_start DESC
+            ORDER BY sm.session_start_at DESC
             ROWS BETWEEN 4 PRECEDING AND CURRENT ROW
         ) AS rolling_spm
     FROM session_metrics sm
@@ -141,7 +154,7 @@ recent_form AS (
         MAX(rolling_win_rate) FILTER (WHERE session_rank = 1) AS recent_win_rate,
         MAX(rolling_kpm) FILTER (WHERE session_rank = 1) AS recent_kpm,
         MAX(rolling_spm) FILTER (WHERE session_rank = 1) AS recent_spm,
-        MAX(session_start) AS last_session_start,
+        MAX(session_start_at) AS last_session_start,
         MAX(session_end_at) AS last_session_end
     FROM ranked_sessions
     GROUP BY player_id
@@ -187,7 +200,7 @@ aggregates AS (
         SUM(sm.kills)::NUMERIC / NULLIF(SUM(sm.seconds_played) / 60.0, 0) AS kills_per_minute,
         SUM(sm.score)::NUMERIC / NULLIF(SUM(sm.seconds_played) / 60.0, 0) AS score_per_minute,
         SUM(COALESCE(sm.win_flag, 0))::NUMERIC / NULLIF(COUNT(sm.session_id), 0) AS win_rate,
-        MAX(COALESCE(sm.session_end_at, sm.session_start)) AS last_seen_at
+        MAX(COALESCE(sm.session_end_at, sm.session_start_at)) AS last_seen_at
     FROM session_metrics sm
     GROUP BY sm.player_id
 ),
@@ -236,20 +249,29 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_player_advanced_metrics_player
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS mv_player_map_mod_breakdowns AS
 WITH session_source AS (
-    SELECT *
-    FROM (
-        SELECT
-            COALESCE(
-                to_jsonb(ps) ->> 'player_id',
-                to_jsonb(ps) ->> 'player_guid',
-                to_jsonb(ps) ->> 'player_hash',
-                to_jsonb(ps) ->> 'player_name'
-            ) AS player_id,
-            starts.session_start,
-            normalized.session_end_at,
-            durations.session_seconds_played,
-            ps.*
-        FROM player_sessions ps
+    SELECT
+        COALESCE(
+            to_jsonb(ps) ->> 'player_id',
+            to_jsonb(ps) ->> 'player_guid',
+            to_jsonb(ps) ->> 'player_hash',
+            to_jsonb(ps) ->> 'player_name'
+        ) AS player_id,
+        starts.session_start AS session_start_at,
+        normalized.session_end_at,
+        durations.session_seconds_played,
+        ps.id,
+        ps.server_id,
+        ps.round_id,
+        ps.team,
+        ps.map_name,
+        ps.mod_name,
+        ps.kills,
+        ps.deaths,
+        ps.score,
+        ps.average_ping_ms,
+        ps.avg_ping_ms,
+        ps.max_ping_ms
+    FROM player_sessions ps
         CROSS JOIN LATERAL (
             SELECT
                 COALESCE(
@@ -306,8 +328,12 @@ WITH session_source AS (
                     60.0
                 ) AS session_seconds_played
         ) durations
-    ) enriched
-    WHERE enriched.player_id IS NOT NULL
+    WHERE COALESCE(
+        to_jsonb(ps) ->> 'player_id',
+        to_jsonb(ps) ->> 'player_guid',
+        to_jsonb(ps) ->> 'player_hash',
+        to_jsonb(ps) ->> 'player_name'
+    ) IS NOT NULL
 ),
 session_metrics AS (
     SELECT

@@ -154,20 +154,29 @@ CREATE INDEX IF NOT EXISTS idx_mv_server_ping_distributions_server_day
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS mv_server_leaderboards AS
 WITH session_source AS (
-    SELECT *
-    FROM (
-        SELECT
-            COALESCE(
-                to_jsonb(ps) ->> 'player_id',
-                to_jsonb(ps) ->> 'player_guid',
-                to_jsonb(ps) ->> 'player_hash',
-                to_jsonb(ps) ->> 'player_name'
-            ) AS player_id,
-            starts.session_start,
-            normalized.session_end_at,
-            durations.session_seconds_played,
-            ps.*
-        FROM player_sessions ps
+    SELECT
+        COALESCE(
+            to_jsonb(ps) ->> 'player_id',
+            to_jsonb(ps) ->> 'player_guid',
+            to_jsonb(ps) ->> 'player_hash',
+            to_jsonb(ps) ->> 'player_name'
+        ) AS player_id,
+        starts.session_start AS session_start_at,
+        normalized.session_end_at,
+        durations.session_seconds_played,
+        ps.id,
+        ps.server_id,
+        ps.round_id,
+        ps.team,
+        ps.map_name,
+        ps.mod_name,
+        ps.kills,
+        ps.deaths,
+        ps.score,
+        ps.average_ping_ms,
+        ps.avg_ping_ms,
+        ps.max_ping_ms
+    FROM player_sessions ps
         CROSS JOIN LATERAL (
             SELECT
                 COALESCE(
@@ -224,8 +233,12 @@ WITH session_source AS (
                     60.0
                 ) AS session_seconds_played
         ) durations
-    ) enriched
-    WHERE enriched.player_id IS NOT NULL
+    WHERE COALESCE(
+        to_jsonb(ps) ->> 'player_id',
+        to_jsonb(ps) ->> 'player_guid',
+        to_jsonb(ps) ->> 'player_hash',
+        to_jsonb(ps) ->> 'player_name'
+    ) IS NOT NULL
 ),
 session_metrics AS (
     SELECT
@@ -234,7 +247,7 @@ session_metrics AS (
         ss.kills,
         ss.deaths,
         ss.score,
-        ss.session_start,
+        ss.session_start_at,
         ss.session_end_at,
         CASE
             WHEN COALESCE(r.winning_team, ss.team) IS NULL THEN NULL
@@ -253,7 +266,7 @@ player_totals AS (
         SUM(deaths) AS total_deaths,
         SUM(score) AS total_score,
         SUM(COALESCE(win_flag, 0))::NUMERIC / NULLIF(COUNT(*), 0) AS win_rate,
-        MAX(COALESCE(session_end_at, session_start)) AS last_seen_at
+        MAX(COALESCE(session_end_at, session_start_at)) AS last_seen_at
     FROM session_metrics
     GROUP BY server_id, player_id
 ),
