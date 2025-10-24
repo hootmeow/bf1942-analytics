@@ -37,12 +37,12 @@ Install the base toolchain, Python runtime, and PostgreSQL client headers:
 
 ```bash
 sudo apt update
-sudo apt install -y python3.11 python3.11-venv python3-pip build-essential libpq-dev \
+sudo apt install -y python3 python3-venv python3-pip build-essential libpq-dev \
     postgresql postgresql-contrib git
 ```
 
 > **Why the extra packages?**
-> - `python3.11-venv` allows you to create an isolated virtual environment for
+> - `python3-venv` allows you to create an isolated virtual environment for
 >   the analytics application.
 > - `libpq-dev` and `build-essential` ensure that the `asyncpg` wheel can build
 >   if precompiled wheels are unavailable for your platform.
@@ -72,7 +72,7 @@ Create and activate a dedicated virtual environment (adjust the path if you
 prefer a different location):
 
 ```bash
-python3.11 -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt

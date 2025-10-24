@@ -6,33 +6,48 @@
 -- @refresh_sql REFRESH MATERIALIZED VIEW CONCURRENTLY mv_player_advanced_metrics;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS mv_player_advanced_metrics AS
-WITH session_metrics AS (
+WITH session_source AS (
+    SELECT *
+    FROM (
+        SELECT
+            COALESCE(
+                to_jsonb(ps) ->> 'player_id',
+                to_jsonb(ps) ->> 'player_guid',
+                to_jsonb(ps) ->> 'player_hash',
+                to_jsonb(ps) ->> 'player_name'
+            ) AS player_id,
+            ps.*
+        FROM player_sessions ps
+    ) enriched
+    WHERE enriched.player_id IS NOT NULL
+),
+session_metrics AS (
     SELECT
-        ps.player_id,
-        ps.id AS session_id,
-        ps.server_id,
-        ps.round_id,
-        ps.session_start,
-        ps.session_end,
-        GREATEST(EXTRACT(EPOCH FROM (COALESCE(ps.session_end, NOW()) - ps.session_start)), 60) AS seconds_played,
-        ps.kills,
-        ps.deaths,
-        ps.score,
-        ps.team,
-        COALESCE(r.winning_team, ps.team) AS inferred_winning_team,
-        COALESCE(r.map_name, ps.map_name) AS map_name,
-        COALESCE(r.mod_name, ps.mod_name) AS mod_name,
+        ss.player_id,
+        ss.id AS session_id,
+        ss.server_id,
+        ss.round_id,
+        ss.session_start,
+        ss.session_end,
+        GREATEST(EXTRACT(EPOCH FROM (COALESCE(ss.session_end, NOW()) - ss.session_start)), 60) AS seconds_played,
+        ss.kills,
+        ss.deaths,
+        ss.score,
+        ss.team,
+        COALESCE(r.winning_team, ss.team) AS inferred_winning_team,
+        COALESCE(r.map_name, ss.map_name) AS map_name,
+        COALESCE(r.mod_name, ss.mod_name) AS mod_name,
         CASE
-            WHEN COALESCE(r.winning_team, ps.team) IS NULL THEN NULL
-            WHEN ps.team IS NULL THEN NULL
-            WHEN COALESCE(r.winning_team, ps.team) = ps.team THEN 1
+            WHEN COALESCE(r.winning_team, ss.team) IS NULL THEN NULL
+            WHEN ss.team IS NULL THEN NULL
+            WHEN COALESCE(r.winning_team, ss.team) = ss.team THEN 1
             ELSE 0
         END AS win_flag,
-        (ps.kills::NUMERIC / NULLIF(ps.deaths, 0)) AS session_kd,
-        (ps.kills::NUMERIC / NULLIF(GREATEST(EXTRACT(EPOCH FROM (COALESCE(ps.session_end, NOW()) - ps.session_start)), 60) / 60.0, 0)) AS kills_per_minute,
-        (ps.score::NUMERIC / NULLIF(GREATEST(EXTRACT(EPOCH FROM (COALESCE(ps.session_end, NOW()) - ps.session_start)), 60) / 60.0, 0)) AS score_per_minute
-    FROM player_sessions ps
-    LEFT JOIN rounds r ON r.id = ps.round_id
+        (ss.kills::NUMERIC / NULLIF(ss.deaths, 0)) AS session_kd,
+        (ss.kills::NUMERIC / NULLIF(GREATEST(EXTRACT(EPOCH FROM (COALESCE(ss.session_end, NOW()) - ss.session_start)), 60) / 60.0, 0)) AS kills_per_minute,
+        (ss.score::NUMERIC / NULLIF(GREATEST(EXTRACT(EPOCH FROM (COALESCE(ss.session_end, NOW()) - ss.session_start)), 60) / 60.0, 0)) AS score_per_minute
+    FROM session_source ss
+    LEFT JOIN rounds r ON r.id = ss.round_id
 ),
 ranked_sessions AS (
     SELECT
@@ -161,23 +176,38 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_mv_player_advanced_metrics_player
 -- @refresh_sql REFRESH MATERIALIZED VIEW CONCURRENTLY mv_player_map_mod_breakdowns;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS mv_player_map_mod_breakdowns AS
-WITH session_metrics AS (
+WITH session_source AS (
+    SELECT *
+    FROM (
+        SELECT
+            COALESCE(
+                to_jsonb(ps) ->> 'player_id',
+                to_jsonb(ps) ->> 'player_guid',
+                to_jsonb(ps) ->> 'player_hash',
+                to_jsonb(ps) ->> 'player_name'
+            ) AS player_id,
+            ps.*
+        FROM player_sessions ps
+    ) enriched
+    WHERE enriched.player_id IS NOT NULL
+),
+session_metrics AS (
     SELECT
-        ps.player_id,
-        COALESCE(r.map_name, ps.map_name) AS map_name,
-        COALESCE(r.mod_name, ps.mod_name) AS mod_name,
-        GREATEST(EXTRACT(EPOCH FROM (COALESCE(ps.session_end, NOW()) - ps.session_start)), 60) AS seconds_played,
-        ps.kills,
-        ps.deaths,
-        ps.score,
+        ss.player_id,
+        COALESCE(r.map_name, ss.map_name) AS map_name,
+        COALESCE(r.mod_name, ss.mod_name) AS mod_name,
+        GREATEST(EXTRACT(EPOCH FROM (COALESCE(ss.session_end, NOW()) - ss.session_start)), 60) AS seconds_played,
+        ss.kills,
+        ss.deaths,
+        ss.score,
         CASE
-            WHEN COALESCE(r.winning_team, ps.team) IS NULL THEN NULL
-            WHEN ps.team IS NULL THEN NULL
-            WHEN COALESCE(r.winning_team, ps.team) = ps.team THEN 1
+            WHEN COALESCE(r.winning_team, ss.team) IS NULL THEN NULL
+            WHEN ss.team IS NULL THEN NULL
+            WHEN COALESCE(r.winning_team, ss.team) = ss.team THEN 1
             ELSE 0
         END AS win_flag
-    FROM player_sessions ps
-    LEFT JOIN rounds r ON r.id = ps.round_id
+    FROM session_source ss
+    LEFT JOIN rounds r ON r.id = ss.round_id
 )
 SELECT
     player_id,
@@ -211,12 +241,17 @@ CREATE INDEX IF NOT EXISTS idx_mv_player_map_mod_breakdowns_player_map
 -- |    NOW() AS updated_at
 -- |FROM (
 -- |    SELECT
--- |        ps.player_id,
+-- |        COALESCE(
+-- |            to_jsonb(ps) ->> 'player_id',
+-- |            to_jsonb(ps) ->> 'player_guid',
+-- |            to_jsonb(ps) ->> 'player_hash',
+-- |            to_jsonb(ps) ->> 'player_name'
+-- |        ) AS player_id,
 -- |        DATE_TRUNC('hour', ps.session_start) AS hour_bucket,
 -- |        COUNT(*) AS sessions_started,
 -- |        SUM(GREATEST(EXTRACT(EPOCH FROM (COALESCE(ps.session_end, NOW()) - ps.session_start)), 60))::BIGINT AS seconds_played
 -- |    FROM player_sessions ps
--- |    GROUP BY ps.player_id, DATE_TRUNC('hour', ps.session_start)
+-- |    GROUP BY player_id, DATE_TRUNC('hour', ps.session_start)
 -- |) agg
 -- |WHERE agg.hour_bucket >= COALESCE((SELECT MAX(hour_bucket) FROM player_session_heatmaps), '1970-01-01'::TIMESTAMPTZ)
 -- |ON CONFLICT (player_id, hour_bucket) DO UPDATE

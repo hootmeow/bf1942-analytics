@@ -137,23 +137,38 @@ CREATE INDEX IF NOT EXISTS idx_mv_server_ping_distributions_server_day
 -- @refresh_sql REFRESH MATERIALIZED VIEW CONCURRENTLY mv_server_leaderboards;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS mv_server_leaderboards AS
-WITH session_metrics AS (
+WITH session_source AS (
+    SELECT *
+    FROM (
+        SELECT
+            COALESCE(
+                to_jsonb(ps) ->> 'player_id',
+                to_jsonb(ps) ->> 'player_guid',
+                to_jsonb(ps) ->> 'player_hash',
+                to_jsonb(ps) ->> 'player_name'
+            ) AS player_id,
+            ps.*
+        FROM player_sessions ps
+    ) enriched
+    WHERE enriched.player_id IS NOT NULL
+),
+session_metrics AS (
     SELECT
-        ps.server_id,
-        ps.player_id,
-        ps.kills,
-        ps.deaths,
-        ps.score,
-        ps.session_start,
-        ps.session_end,
+        ss.server_id,
+        ss.player_id,
+        ss.kills,
+        ss.deaths,
+        ss.score,
+        ss.session_start,
+        ss.session_end,
         CASE
-            WHEN COALESCE(r.winning_team, ps.team) IS NULL THEN NULL
-            WHEN ps.team IS NULL THEN NULL
-            WHEN COALESCE(r.winning_team, ps.team) = ps.team THEN 1
+            WHEN COALESCE(r.winning_team, ss.team) IS NULL THEN NULL
+            WHEN ss.team IS NULL THEN NULL
+            WHEN COALESCE(r.winning_team, ss.team) = ss.team THEN 1
             ELSE 0
         END AS win_flag
-    FROM player_sessions ps
-    LEFT JOIN rounds r ON r.id = ps.round_id
+    FROM session_source ss
+    LEFT JOIN rounds r ON r.id = ss.round_id
 ),
 player_totals AS (
     SELECT
