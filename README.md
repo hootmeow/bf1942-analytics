@@ -92,15 +92,26 @@ The dependency footprint is intentionally small:
 
 ## Provision PostgreSQL
 
-If you installed PostgreSQL locally, create a role and database for the
-analytics service. The examples below assume the ingest pipeline already writes
-into a database named `bf1942_db`.
+The analytics engine **reuses** the database provisioned by the
+`bf1942-ingest` service. Ensure the ingest stack is installed and has already
+created the `bf1942_db` database (or update the name in the commands below).
+
+With PostgreSQL installed locally, create a role for the analytics service and
+grant it the permissions required to refresh materialized views and execute
+maintenance procedures:
 
 ```bash
 sudo -u postgres psql <<'SQL'
-CREATE ROLE bf1942_analytics WITH LOGIN PASSWORD 'change-me';
-CREATE DATABASE bf1942_db OWNER bf1942_analytics;
-GRANT ALL PRIVILEGES ON DATABASE bf1942_db TO bf1942_analytics;
+DO
+$$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'bf1942_analytics') THEN
+        CREATE ROLE bf1942_analytics WITH LOGIN PASSWORD 'change-me';
+    END IF;
+END
+$$;
+
+GRANT CONNECT ON DATABASE bf1942_db TO bf1942_analytics;
 \c bf1942_db
 GRANT USAGE ON SCHEMA public TO bf1942_analytics;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO bf1942_analytics;
@@ -108,9 +119,8 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO bf
 SQL
 ```
 
-If the ingest service already created the database, you only need to provision a
-role with `SELECT` access plus rights to refresh materialized views and execute
-maintenance stored procedures.
+If you use a managed PostgreSQL instance, create the role through your provider
+and apply the same grants.
 
 Record the connection details (`host`, `port`, `database`, `user`, `password`) –
 you will reference them in the configuration step.
@@ -164,7 +174,9 @@ All materialized views, helper tables, and job metadata live under
 apply any new SQL files in lexicographical order.
 
 For a manual bootstrap (useful when seeding a fresh database from an admin
-shell), activate the virtual environment and run the small helper script below:
+shell), activate the virtual environment and run the small helper script below.
+The configuration loader now reads values from `.env` automatically, so there is
+no need to export each variable by hand:
 
 ```bash
 source .venv/bin/activate
