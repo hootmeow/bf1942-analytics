@@ -16,6 +16,7 @@ WITH session_source AS (
                 to_jsonb(ps) ->> 'player_hash',
                 to_jsonb(ps) ->> 'player_name'
             ) AS player_id,
+            starts.session_start,
             normalized.session_end_at,
             durations.session_seconds_played,
             ps.*
@@ -23,35 +24,55 @@ WITH session_source AS (
         CROSS JOIN LATERAL (
             SELECT
                 COALESCE(
+                    NULLIF(to_jsonb(ps) ->> 'session_start', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_start_at', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_started_at', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_begin', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_begin_at', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'start_time', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'started_at', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'created_at', '')::TIMESTAMPTZ
+                ) AS session_start
+        ) starts
+        CROSS JOIN LATERAL (
+            SELECT
+                COALESCE(
                     NULLIF(to_jsonb(ps) ->> 'session_end', '')::TIMESTAMPTZ,
                     NULLIF(to_jsonb(ps) ->> 'session_end_at', '')::TIMESTAMPTZ,
                     NULLIF(to_jsonb(ps) ->> 'session_finished_at', '')::TIMESTAMPTZ,
                     CASE
-                        WHEN NULLIF(to_jsonb(ps) ->> 'session_duration_seconds', '') IS NOT NULL THEN
-                            ps.session_start
+                        WHEN starts.session_start IS NOT NULL
+                             AND NULLIF(to_jsonb(ps) ->> 'session_duration_seconds', '') IS NOT NULL THEN
+                            starts.session_start
                             + MAKE_INTERVAL(secs => (to_jsonb(ps) ->> 'session_duration_seconds')::DOUBLE PRECISION)
-                        WHEN NULLIF(to_jsonb(ps) ->> 'duration_seconds', '') IS NOT NULL THEN
-                            ps.session_start
+                        WHEN starts.session_start IS NOT NULL
+                             AND NULLIF(to_jsonb(ps) ->> 'duration_seconds', '') IS NOT NULL THEN
+                            starts.session_start
                             + MAKE_INTERVAL(secs => (to_jsonb(ps) ->> 'duration_seconds')::DOUBLE PRECISION)
-                        WHEN NULLIF(to_jsonb(ps) ->> 'seconds_played', '') IS NOT NULL THEN
-                            ps.session_start
+                        WHEN starts.session_start IS NOT NULL
+                             AND NULLIF(to_jsonb(ps) ->> 'seconds_played', '') IS NOT NULL THEN
+                            starts.session_start
                             + MAKE_INTERVAL(secs => (to_jsonb(ps) ->> 'seconds_played')::DOUBLE PRECISION)
                     END
                 ) AS session_end_at
         ) normalized
         CROSS JOIN LATERAL (
             SELECT
-                GREATEST(
-                    COALESCE(
-                        NULLIF(to_jsonb(ps) ->> 'session_duration_seconds', '')::DOUBLE PRECISION,
-                        NULLIF(to_jsonb(ps) ->> 'duration_seconds', '')::DOUBLE PRECISION,
-                        NULLIF(to_jsonb(ps) ->> 'seconds_played', '')::DOUBLE PRECISION,
-                        CASE
-                            WHEN normalized.session_end_at IS NOT NULL THEN
-                                EXTRACT(EPOCH FROM (normalized.session_end_at - ps.session_start))
-                            ELSE
-                                EXTRACT(EPOCH FROM (NOW() - ps.session_start))
-                        END
+                COALESCE(
+                    GREATEST(
+                        COALESCE(
+                            NULLIF(to_jsonb(ps) ->> 'session_duration_seconds', '')::DOUBLE PRECISION,
+                            NULLIF(to_jsonb(ps) ->> 'duration_seconds', '')::DOUBLE PRECISION,
+                            NULLIF(to_jsonb(ps) ->> 'seconds_played', '')::DOUBLE PRECISION,
+                            CASE
+                                WHEN normalized.session_end_at IS NOT NULL
+                                     AND starts.session_start IS NOT NULL THEN
+                                    EXTRACT(EPOCH FROM (normalized.session_end_at - starts.session_start))
+                                WHEN starts.session_start IS NOT NULL THEN
+                                    EXTRACT(EPOCH FROM (NOW() - starts.session_start))
+                            END
+                        ),
+                        60.0
                     ),
                     60.0
                 ) AS session_seconds_played
