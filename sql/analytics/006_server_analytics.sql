@@ -116,15 +116,31 @@ CREATE INDEX IF NOT EXISTS idx_mv_server_rotation_statistics_server_map
 -- @refresh_sql REFRESH MATERIALIZED VIEW CONCURRENTLY mv_server_ping_distributions;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS mv_server_ping_distributions AS
+WITH session_timings AS (
+    SELECT
+        ps.server_id,
+        COALESCE(
+            NULLIF(to_jsonb(ps) ->> 'session_start', '')::TIMESTAMPTZ,
+            NULLIF(to_jsonb(ps) ->> 'session_start_at', '')::TIMESTAMPTZ,
+            NULLIF(to_jsonb(ps) ->> 'session_started_at', '')::TIMESTAMPTZ,
+            NULLIF(to_jsonb(ps) ->> 'session_begin', '')::TIMESTAMPTZ,
+            NULLIF(to_jsonb(ps) ->> 'session_begin_at', '')::TIMESTAMPTZ,
+            NULLIF(to_jsonb(ps) ->> 'start_time', '')::TIMESTAMPTZ,
+            NULLIF(to_jsonb(ps) ->> 'started_at', '')::TIMESTAMPTZ,
+            NULLIF(to_jsonb(ps) ->> 'created_at', '')::TIMESTAMPTZ
+        ) AS session_start,
+        COALESCE(ps.average_ping_ms, ps.avg_ping_ms, ps.max_ping_ms) AS ping_sample
+    FROM player_sessions ps
+)
 SELECT
-    ps.server_id,
-    DATE_TRUNC('day', ps.session_start) AS day_bucket,
+    st.server_id,
+    DATE_TRUNC('day', st.session_start) AS day_bucket,
     COUNT(*) AS samples,
-    PERCENTILE_CONT(ARRAY[0.1, 0.25, 0.5, 0.75, 0.9]) WITHIN GROUP (ORDER BY COALESCE(ps.average_ping_ms, ps.avg_ping_ms, ps.max_ping_ms, 0)) AS ping_percentiles,
-    AVG(COALESCE(ps.average_ping_ms, ps.avg_ping_ms, ps.max_ping_ms)) AS average_ping_ms
-FROM player_sessions ps
-WHERE COALESCE(ps.average_ping_ms, ps.avg_ping_ms, ps.max_ping_ms) IS NOT NULL
-GROUP BY ps.server_id, DATE_TRUNC('day', ps.session_start);
+    PERCENTILE_CONT(ARRAY[0.1, 0.25, 0.5, 0.75, 0.9]) WITHIN GROUP (ORDER BY st.ping_sample) AS ping_percentiles,
+    AVG(st.ping_sample) AS average_ping_ms
+FROM session_timings st
+WHERE st.ping_sample IS NOT NULL
+GROUP BY st.server_id, DATE_TRUNC('day', st.session_start);
 
 CREATE INDEX IF NOT EXISTS idx_mv_server_ping_distributions_server_day
     ON mv_server_ping_distributions (server_id, day_bucket);
@@ -147,8 +163,67 @@ WITH session_source AS (
                 to_jsonb(ps) ->> 'player_hash',
                 to_jsonb(ps) ->> 'player_name'
             ) AS player_id,
+            starts.session_start,
+            normalized.session_end_at,
+            durations.session_seconds_played,
             ps.*
         FROM player_sessions ps
+        CROSS JOIN LATERAL (
+            SELECT
+                COALESCE(
+                    NULLIF(to_jsonb(ps) ->> 'session_start', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_start_at', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_started_at', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_begin', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_begin_at', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'start_time', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'started_at', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'created_at', '')::TIMESTAMPTZ
+                ) AS session_start
+        ) starts
+        CROSS JOIN LATERAL (
+            SELECT
+                COALESCE(
+                    NULLIF(to_jsonb(ps) ->> 'session_end', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_end_at', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_finished_at', '')::TIMESTAMPTZ,
+                    CASE
+                        WHEN starts.session_start IS NOT NULL
+                             AND NULLIF(to_jsonb(ps) ->> 'session_duration_seconds', '') IS NOT NULL THEN
+                            starts.session_start
+                            + MAKE_INTERVAL(secs => (to_jsonb(ps) ->> 'session_duration_seconds')::DOUBLE PRECISION)
+                        WHEN starts.session_start IS NOT NULL
+                             AND NULLIF(to_jsonb(ps) ->> 'duration_seconds', '') IS NOT NULL THEN
+                            starts.session_start
+                            + MAKE_INTERVAL(secs => (to_jsonb(ps) ->> 'duration_seconds')::DOUBLE PRECISION)
+                        WHEN starts.session_start IS NOT NULL
+                             AND NULLIF(to_jsonb(ps) ->> 'seconds_played', '') IS NOT NULL THEN
+                            starts.session_start
+                            + MAKE_INTERVAL(secs => (to_jsonb(ps) ->> 'seconds_played')::DOUBLE PRECISION)
+                    END
+                ) AS session_end_at
+        ) normalized
+        CROSS JOIN LATERAL (
+            SELECT
+                COALESCE(
+                    GREATEST(
+                        COALESCE(
+                            NULLIF(to_jsonb(ps) ->> 'session_duration_seconds', '')::DOUBLE PRECISION,
+                            NULLIF(to_jsonb(ps) ->> 'duration_seconds', '')::DOUBLE PRECISION,
+                            NULLIF(to_jsonb(ps) ->> 'seconds_played', '')::DOUBLE PRECISION,
+                            CASE
+                                WHEN normalized.session_end_at IS NOT NULL
+                                     AND starts.session_start IS NOT NULL THEN
+                                    EXTRACT(EPOCH FROM (normalized.session_end_at - starts.session_start))
+                                WHEN starts.session_start IS NOT NULL THEN
+                                    EXTRACT(EPOCH FROM (NOW() - starts.session_start))
+                            END
+                        ),
+                        60.0
+                    ),
+                    60.0
+                ) AS session_seconds_played
+        ) durations
     ) enriched
     WHERE enriched.player_id IS NOT NULL
 ),
@@ -160,7 +235,7 @@ session_metrics AS (
         ss.deaths,
         ss.score,
         ss.session_start,
-        ss.session_end,
+        ss.session_end_at,
         CASE
             WHEN COALESCE(r.winning_team, ss.team) IS NULL THEN NULL
             WHEN ss.team IS NULL THEN NULL
@@ -178,7 +253,7 @@ player_totals AS (
         SUM(deaths) AS total_deaths,
         SUM(score) AS total_score,
         SUM(COALESCE(win_flag, 0))::NUMERIC / NULLIF(COUNT(*), 0) AS win_rate,
-        MAX(COALESCE(session_end, session_start)) AS last_seen_at
+        MAX(COALESCE(session_end_at, session_start)) AS last_seen_at
     FROM session_metrics
     GROUP BY server_id, player_id
 ),

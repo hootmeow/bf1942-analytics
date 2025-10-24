@@ -16,8 +16,67 @@ WITH session_source AS (
                 to_jsonb(ps) ->> 'player_hash',
                 to_jsonb(ps) ->> 'player_name'
             ) AS player_id,
+            starts.session_start,
+            normalized.session_end_at,
+            durations.session_seconds_played,
             ps.*
         FROM player_sessions ps
+        CROSS JOIN LATERAL (
+            SELECT
+                COALESCE(
+                    NULLIF(to_jsonb(ps) ->> 'session_start', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_start_at', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_started_at', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_begin', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_begin_at', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'start_time', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'started_at', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'created_at', '')::TIMESTAMPTZ
+                ) AS session_start
+        ) starts
+        CROSS JOIN LATERAL (
+            SELECT
+                COALESCE(
+                    NULLIF(to_jsonb(ps) ->> 'session_end', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_end_at', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_finished_at', '')::TIMESTAMPTZ,
+                    CASE
+                        WHEN starts.session_start IS NOT NULL
+                             AND NULLIF(to_jsonb(ps) ->> 'session_duration_seconds', '') IS NOT NULL THEN
+                            starts.session_start
+                            + MAKE_INTERVAL(secs => (to_jsonb(ps) ->> 'session_duration_seconds')::DOUBLE PRECISION)
+                        WHEN starts.session_start IS NOT NULL
+                             AND NULLIF(to_jsonb(ps) ->> 'duration_seconds', '') IS NOT NULL THEN
+                            starts.session_start
+                            + MAKE_INTERVAL(secs => (to_jsonb(ps) ->> 'duration_seconds')::DOUBLE PRECISION)
+                        WHEN starts.session_start IS NOT NULL
+                             AND NULLIF(to_jsonb(ps) ->> 'seconds_played', '') IS NOT NULL THEN
+                            starts.session_start
+                            + MAKE_INTERVAL(secs => (to_jsonb(ps) ->> 'seconds_played')::DOUBLE PRECISION)
+                    END
+                ) AS session_end_at
+        ) normalized
+        CROSS JOIN LATERAL (
+            SELECT
+                COALESCE(
+                    GREATEST(
+                        COALESCE(
+                            NULLIF(to_jsonb(ps) ->> 'session_duration_seconds', '')::DOUBLE PRECISION,
+                            NULLIF(to_jsonb(ps) ->> 'duration_seconds', '')::DOUBLE PRECISION,
+                            NULLIF(to_jsonb(ps) ->> 'seconds_played', '')::DOUBLE PRECISION,
+                            CASE
+                                WHEN normalized.session_end_at IS NOT NULL
+                                     AND starts.session_start IS NOT NULL THEN
+                                    EXTRACT(EPOCH FROM (normalized.session_end_at - starts.session_start))
+                                WHEN starts.session_start IS NOT NULL THEN
+                                    EXTRACT(EPOCH FROM (NOW() - starts.session_start))
+                            END
+                        ),
+                        60.0
+                    ),
+                    60.0
+                ) AS session_seconds_played
+        ) durations
     ) enriched
     WHERE enriched.player_id IS NOT NULL
 ),
@@ -28,8 +87,8 @@ session_metrics AS (
         ss.server_id,
         ss.round_id,
         ss.session_start,
-        ss.session_end,
-        GREATEST(EXTRACT(EPOCH FROM (COALESCE(ss.session_end, NOW()) - ss.session_start)), 60) AS seconds_played,
+        ss.session_end_at,
+        ss.session_seconds_played AS seconds_played,
         ss.kills,
         ss.deaths,
         ss.score,
@@ -44,8 +103,8 @@ session_metrics AS (
             ELSE 0
         END AS win_flag,
         (ss.kills::NUMERIC / NULLIF(ss.deaths, 0)) AS session_kd,
-        (ss.kills::NUMERIC / NULLIF(GREATEST(EXTRACT(EPOCH FROM (COALESCE(ss.session_end, NOW()) - ss.session_start)), 60) / 60.0, 0)) AS kills_per_minute,
-        (ss.score::NUMERIC / NULLIF(GREATEST(EXTRACT(EPOCH FROM (COALESCE(ss.session_end, NOW()) - ss.session_start)), 60) / 60.0, 0)) AS score_per_minute
+        (ss.kills::NUMERIC / NULLIF(ss.session_seconds_played / 60.0, 0)) AS kills_per_minute,
+        (ss.score::NUMERIC / NULLIF(ss.session_seconds_played / 60.0, 0)) AS score_per_minute
     FROM session_source ss
     LEFT JOIN rounds r ON r.id = ss.round_id
 ),
@@ -83,7 +142,7 @@ recent_form AS (
         MAX(rolling_kpm) FILTER (WHERE session_rank = 1) AS recent_kpm,
         MAX(rolling_spm) FILTER (WHERE session_rank = 1) AS recent_spm,
         MAX(session_start) AS last_session_start,
-        MAX(session_end) AS last_session_end
+        MAX(session_end_at) AS last_session_end
     FROM ranked_sessions
     GROUP BY player_id
 ),
@@ -128,7 +187,7 @@ aggregates AS (
         SUM(sm.kills)::NUMERIC / NULLIF(SUM(sm.seconds_played) / 60.0, 0) AS kills_per_minute,
         SUM(sm.score)::NUMERIC / NULLIF(SUM(sm.seconds_played) / 60.0, 0) AS score_per_minute,
         SUM(COALESCE(sm.win_flag, 0))::NUMERIC / NULLIF(COUNT(sm.session_id), 0) AS win_rate,
-        MAX(COALESCE(sm.session_end, sm.session_start)) AS last_seen_at
+        MAX(COALESCE(sm.session_end_at, sm.session_start)) AS last_seen_at
     FROM session_metrics sm
     GROUP BY sm.player_id
 ),
@@ -186,8 +245,67 @@ WITH session_source AS (
                 to_jsonb(ps) ->> 'player_hash',
                 to_jsonb(ps) ->> 'player_name'
             ) AS player_id,
+            starts.session_start,
+            normalized.session_end_at,
+            durations.session_seconds_played,
             ps.*
         FROM player_sessions ps
+        CROSS JOIN LATERAL (
+            SELECT
+                COALESCE(
+                    NULLIF(to_jsonb(ps) ->> 'session_start', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_start_at', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_started_at', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_begin', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_begin_at', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'start_time', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'started_at', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'created_at', '')::TIMESTAMPTZ
+                ) AS session_start
+        ) starts
+        CROSS JOIN LATERAL (
+            SELECT
+                COALESCE(
+                    NULLIF(to_jsonb(ps) ->> 'session_end', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_end_at', '')::TIMESTAMPTZ,
+                    NULLIF(to_jsonb(ps) ->> 'session_finished_at', '')::TIMESTAMPTZ,
+                    CASE
+                        WHEN starts.session_start IS NOT NULL
+                             AND NULLIF(to_jsonb(ps) ->> 'session_duration_seconds', '') IS NOT NULL THEN
+                            starts.session_start
+                            + MAKE_INTERVAL(secs => (to_jsonb(ps) ->> 'session_duration_seconds')::DOUBLE PRECISION)
+                        WHEN starts.session_start IS NOT NULL
+                             AND NULLIF(to_jsonb(ps) ->> 'duration_seconds', '') IS NOT NULL THEN
+                            starts.session_start
+                            + MAKE_INTERVAL(secs => (to_jsonb(ps) ->> 'duration_seconds')::DOUBLE PRECISION)
+                        WHEN starts.session_start IS NOT NULL
+                             AND NULLIF(to_jsonb(ps) ->> 'seconds_played', '') IS NOT NULL THEN
+                            starts.session_start
+                            + MAKE_INTERVAL(secs => (to_jsonb(ps) ->> 'seconds_played')::DOUBLE PRECISION)
+                    END
+                ) AS session_end_at
+        ) normalized
+        CROSS JOIN LATERAL (
+            SELECT
+                COALESCE(
+                    GREATEST(
+                        COALESCE(
+                            NULLIF(to_jsonb(ps) ->> 'session_duration_seconds', '')::DOUBLE PRECISION,
+                            NULLIF(to_jsonb(ps) ->> 'duration_seconds', '')::DOUBLE PRECISION,
+                            NULLIF(to_jsonb(ps) ->> 'seconds_played', '')::DOUBLE PRECISION,
+                            CASE
+                                WHEN normalized.session_end_at IS NOT NULL
+                                     AND starts.session_start IS NOT NULL THEN
+                                    EXTRACT(EPOCH FROM (normalized.session_end_at - starts.session_start))
+                                WHEN starts.session_start IS NOT NULL THEN
+                                    EXTRACT(EPOCH FROM (NOW() - starts.session_start))
+                            END
+                        ),
+                        60.0
+                    ),
+                    60.0
+                ) AS session_seconds_played
+        ) durations
     ) enriched
     WHERE enriched.player_id IS NOT NULL
 ),
@@ -196,7 +314,7 @@ session_metrics AS (
         ss.player_id,
         COALESCE(r.map_name, ss.map_name) AS map_name,
         COALESCE(r.mod_name, ss.mod_name) AS mod_name,
-        GREATEST(EXTRACT(EPOCH FROM (COALESCE(ss.session_end, NOW()) - ss.session_start)), 60) AS seconds_played,
+        ss.session_seconds_played AS seconds_played,
         ss.kills,
         ss.deaths,
         ss.score,
@@ -247,11 +365,36 @@ CREATE INDEX IF NOT EXISTS idx_mv_player_map_mod_breakdowns_player_map
 -- |            to_jsonb(ps) ->> 'player_hash',
 -- |            to_jsonb(ps) ->> 'player_name'
 -- |        ) AS player_id,
--- |        DATE_TRUNC('hour', ps.session_start) AS hour_bucket,
+-- |        DATE_TRUNC(
+-- |            'hour',
+-- |            COALESCE(
+-- |                NULLIF(to_jsonb(ps) ->> 'session_start', '')::TIMESTAMPTZ,
+-- |                NULLIF(to_jsonb(ps) ->> 'session_start_at', '')::TIMESTAMPTZ,
+-- |                NULLIF(to_jsonb(ps) ->> 'session_started_at', '')::TIMESTAMPTZ,
+-- |                NULLIF(to_jsonb(ps) ->> 'session_begin', '')::TIMESTAMPTZ,
+-- |                NULLIF(to_jsonb(ps) ->> 'session_begin_at', '')::TIMESTAMPTZ,
+-- |                NULLIF(to_jsonb(ps) ->> 'start_time', '')::TIMESTAMPTZ,
+-- |                NULLIF(to_jsonb(ps) ->> 'started_at', '')::TIMESTAMPTZ,
+-- |                NULLIF(to_jsonb(ps) ->> 'created_at', '')::TIMESTAMPTZ
+-- |            )
+-- |        ) AS hour_bucket,
 -- |        COUNT(*) AS sessions_started,
--- |        SUM(GREATEST(EXTRACT(EPOCH FROM (COALESCE(ps.session_end, NOW()) - ps.session_start)), 60))::BIGINT AS seconds_played
+-- |        SUM(session_seconds_played)::BIGINT AS seconds_played
 -- |    FROM player_sessions ps
--- |    GROUP BY player_id, DATE_TRUNC('hour', ps.session_start)
+-- |    GROUP BY player_id,
+-- |        DATE_TRUNC(
+-- |            'hour',
+-- |            COALESCE(
+-- |                NULLIF(to_jsonb(ps) ->> 'session_start', '')::TIMESTAMPTZ,
+-- |                NULLIF(to_jsonb(ps) ->> 'session_start_at', '')::TIMESTAMPTZ,
+-- |                NULLIF(to_jsonb(ps) ->> 'session_started_at', '')::TIMESTAMPTZ,
+-- |                NULLIF(to_jsonb(ps) ->> 'session_begin', '')::TIMESTAMPTZ,
+-- |                NULLIF(to_jsonb(ps) ->> 'session_begin_at', '')::TIMESTAMPTZ,
+-- |                NULLIF(to_jsonb(ps) ->> 'start_time', '')::TIMESTAMPTZ,
+-- |                NULLIF(to_jsonb(ps) ->> 'started_at', '')::TIMESTAMPTZ,
+-- |                NULLIF(to_jsonb(ps) ->> 'created_at', '')::TIMESTAMPTZ
+-- |            )
+-- |        )
 -- |) agg
 -- |WHERE agg.hour_bucket >= COALESCE((SELECT MAX(hour_bucket) FROM player_session_heatmaps), '1970-01-01'::TIMESTAMPTZ)
 -- |ON CONFLICT (player_id, hour_bucket) DO UPDATE
